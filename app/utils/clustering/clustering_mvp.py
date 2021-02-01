@@ -101,14 +101,14 @@ def cluster(cohort_submissions: dict) -> list:
 
     return json_groups
 
-    def numpy_convert(o):
-        """
-        Input: Dictionary containing numpy int64 type integars to be converted to python int64
-        for the purpose of making a numpy object
-        Output: Dictionary with only python int64 type for a json object
-        """
-        if isinstance(o, np.int64): return int(o)  
-        raise TypeError
+def numpy_convert(o):
+    """
+    Input: Dictionary containing numpy int64 type integars to be converted to python int64
+    for the purpose of making a numpy object
+    Output: Dictionary with only python int64 type for a json object
+    """
+    if isinstance(o, np.int64): return int(o)  
+    raise TypeError
 
 
 async def batch_cluster(submissions: dict) -> json:
