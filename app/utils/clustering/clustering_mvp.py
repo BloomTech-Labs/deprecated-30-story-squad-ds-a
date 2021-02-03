@@ -1,6 +1,9 @@
 import json
 
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import NearestNeighbors
 
 
 def cluster(cohort_submissions: dict) -> list:
@@ -17,93 +20,95 @@ def cluster(cohort_submissions: dict) -> list:
     Input: dictionary of a single cohort containing nested dictionary
     with 'submission_id' as first level key,
     and 'complexity' as one of the inner keys
-    Output: Nested list of clusters:
-    [[list of submission_ids], [list of submission_ids]]
+    Output: JSON object of clusters:
+    {1: [list of submission_ids], 2: [list of submission_ids]}
     """
 
     # Generate DataFrame from dict
     df = pd.DataFrame.from_dict(cohort_submissions, orient="index")
 
-    # Rank by complexity
-    df = df.sort_values(by=["Complexity"], ascending=False)
+    #Reset index to put ID column first
+    df = df.reset_index()
+    df = df.rename(columns={'index': 'ID'})
 
-    # Initial variables
-    num_submissions = len(df)
-    num_clusters = num_submissions // 4
-    remainder = num_submissions % 4
-    clusters = []
+    # Empty dictionary to store the groupings
+    groups = {}
 
-    # Edge Cases:
-    # - less than 4, they are all in one group
-    if num_submissions < 4:
-        return "Not enough submissions in this cohort to form a full cluster"
+    # Instantiate scaler
+    scaler = StandardScaler()
 
-    # If the remainder is 3 -> last group will be a group of 3 users
-    elif remainder == 3:
-        # Cluster submissions until 7 remain
-        for i in range(num_clusters - 1):
-            # Group by top 4 squad scores
-            clusters.append(list(df.index[:4]))
-            # Drop stories you have grouped already
-            df = df[4:]
+    # Pull out features
+    features = df.drop(df.columns[0], axis=1)
 
-        # Manually cluster final two groups to handle remainder problem
-        # by duplicating 1 submission so each have 4 submission_ids
-        clusters.append(list(df.index[:4]))
-        clusters.append(list(df.index[3:]))
+    # Scale data
+    norm_x = scaler.fit_transform(features)
 
-    # If the remainder is 2 -> last 2 groups will be groups of 3
-    elif remainder == 2:
-        if num_submissions == 6:
-            clusters.append(list(df.index[:4]))
-            clusters.append(list(df.index[2:]))
-        else:
-            # Cluster submissions until 10 remain
-            for i in range(num_clusters - 2):
-                # Group by top 4 squad scores
-                clusters.append(list(df.index[:4]))
-                # Drop stories you have grouped already
-                df = df[4:]
+    # Turn into df
+    df_norm_x = pd.DataFrame(norm_x)
 
-            # Manually cluster final three groups to handle remainder problem
-            clusters.append(list(df.index[:4]))
-            clusters.append(list(df.index[3:7]))
-            clusters.append(list(df.index[6:]))
+    # Instantiate model - groups of 4
+    nn = NearestNeighbors(n_neighbors=4, algorithm='kd_tree')
 
-    # If the remainder is 1 -> last 3 groups will be groups of 3
-    elif remainder == 1:
-        if num_submissions == 5:
-            # Overlap both clusters by 3 submissions
-            clusters.append(list(df.index[:4]))
-            clusters.append(list(df.index[1:]))
-        elif num_submissions == 9:
-            clusters.append(list(df.index[:4]))
-            clusters.append(list(df.index[2:6]))
-            clusters.append(list(df.index[5:]))
-        else:
-            # Cluster submissions until 13 remain
-            for i in range(num_clusters - 3):
-                # Group by top 4 squad scores
-                clusters.append(list(df.index[:4]))
-                # Drop stories you have already grouped
-                df = df[4:]
+    # Counter to use as key for groups in dictionary
+    counter = 1
 
-            # Manually cluster final three overlapping groups to handle
-            # remainder problem
-            clusters.append(list(df.index[:4]))
-            clusters.append(list(df.index[3:7]))
-            clusters.append(list(df.index[6:10]))
-            clusters.append(list(df.index[9:]))
+    # Grab a copy of the df before taking it apart to deal with the remainder problem
+    df_copy = df
 
-    # Else, the remainder is 0. Split evenly by 4
-    else:
-        for i in range(num_clusters):
-            # Group by top 4 squad scores
-            clusters.append(list(df.index[:4]))
-            # Drop stories you have already grouped
-            df = df[4:]
+    # While loop that takes the top user and creates a group with the its three closest users
+    # Drops grouped users and continues until there are less than 12 users left to group
+    # Remainder problem will be dealt with after the while loop runs
+    while len(df_norm_x) >4:
+        # Fit the nearest neighbors model
+        nn.fit(df_norm_x)
 
-    return clusters
+        # Find nearest neighbors
+        array_2 = nn.kneighbors([df_norm_x.iloc[0].values], return_distance=False)
+
+        # Put story_id list into groups dictionary
+        groups[counter] = [df[df.columns[0]][item] for item in array_2[0]]
+
+        # Increment the counter
+        counter += 1
+
+        # Drop the users you have already grouped
+        # From both df's that you are using
+        df_norm_x = df_norm_x.drop(array_2[0])
+        df = df.drop(array_2[0])
+
+        # Reset the index
+        # For both datasets that you are using
+        df_norm_x.reset_index(inplace= True, drop= True)
+        df.reset_index(inplace= True, drop= True)
+
+    # Drop the remainders from copy of df to find most similar
+    for i in range(len(df)):
+        df_copy = df_copy[df_copy[df_copy.columns[0]] != int(df.iloc[i][0])]
+
+    # Do preproccesing done above
+    df_copy.reset_index(inplace=True, drop=True)
+    features_copy = df_copy.drop(df.columns[0], axis=1)
+    norm_x_copy = scaler.fit_transform(features_copy)
+    df_norm_x_copy = pd.DataFrame(norm_x_copy)
+    
+    # Fit to KNN model
+    nn.fit(df_norm_x_copy)
+    
+    # TODO: Finish remainder problem, going to get it working with perfect numbers first
+
+    #Make dictionary into JSON object to be passed back to the web team
+    json_groups = json.dumps(groups, default=numpy_convert)
+
+    return json_groups
+
+def numpy_convert(o):
+    """
+    Input: Dictionary containing numpy int64 type integars to be converted to python int64
+    for the purpose of making a numpy object
+    Output: Dictionary with only python int64 type for a json object
+    """
+    if isinstance(o, np.int64): return int(o)  
+    raise TypeError
 
 
 async def batch_cluster(submissions: dict) -> json:
